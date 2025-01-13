@@ -19,10 +19,12 @@ import re
 import os
 import pickle
 
+
 """
 Potentially use: interval="1m", period="7d"
 for day trading data
 """
+
 
 class TradingEnvironment:
     def __init__(self, prices, initial_balance=10000, max_shares=1000):
@@ -54,11 +56,11 @@ class TradingEnvironment:
           - current price
           - balance
           - shares held
+          - Volume
+          - Change in value ($ or %)
+          - 
         """
         current_price = self.prices[self.current_step].item()
-        print(f"current_price: {current_price}, type: {type(current_price)}")
-        print(f"balance: {self.balance}, type: {type(self.balance)}")
-        print(f"shares_held: {self.shares_held}, type: {type(self.shares_held)}")
         
         if isinstance(self.balance, np.ndarray): ## Band-Aid
             self.balance = int(self.balance.item())
@@ -122,6 +124,9 @@ class ReplayBuffer:
             np.array(next_states),
             np.array(dones)
         )
+        # 100 200 40
+        # 102 200 40 (sell) +1
+        # 104 4200 0
 
     def __len__(self):
         return len(self.buffer)
@@ -190,7 +195,7 @@ class DQNAgent:
                 # If done, the target is just the reward
                 target[actions[i]] = rewards[i]
             else:
-                # Update rule: r + gamma * max(Q_next)
+                # Update rule:Q(s, a) =  r + gamma * max(Q_next)
                 target[actions[i]] = rewards[i] + self.gamma * np.max(q_next[i])
 
         self.model.fit(states, q_values, epochs=1, verbose=0)
@@ -235,9 +240,7 @@ def train_dqn(env, agent, n_episodes=100, batch_size=32):
 
 intel_data = yf.download(
     "INTC",
-    
 )
-
 
 intel_data
 
@@ -245,7 +248,6 @@ intel_data = intel_data[["Open", "Close", "High", "Low", "Volume"]]
 
 intel_data.columns = intel_data.columns.droplevel('Ticker') # Drops Ticker row
 
-intel_data
 data = yf.download('AAPL', start='2020-01-01', end='2022-01-01')
 prices = data['Close'].values
 
