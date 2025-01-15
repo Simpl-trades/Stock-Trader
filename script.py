@@ -20,21 +20,15 @@ import os
 import pickle
 
 
-"""
-Potentially use: interval="1m", period="7d"
-for day trading data
-"""
-
-
 class TradingEnvironment:
-    def __init__(self, prices, initial_balance=10000, max_shares=1000):
+    def __init__(self, df, initial_balance=10000, max_shares=1000):
         """
         prices: A list or array of stock prices (e.g., daily closing prices).
         initial_balance: How much cash we start with.
         max_shares: Maximum shares you can hold (to avoid unrealistic large positions).
         """
-        self.prices = prices
-        self.n_steps = len(prices)
+        self.df = df.reset_index(drop=True).copy()
+        self.n_steps = len(df)
         self.initial_balance = initial_balance
         self.max_shares = max_shares
 
@@ -60,13 +54,24 @@ class TradingEnvironment:
           - Change in value ($ or %)
           - 
         """
-        current_price = self.prices[self.current_step].item()
+        row = self.df.iloc[self.current_step]
+        
+        open_price = row['Open']
+        high_price = row['High']
+        low_price = row['Low']
+        close_price = row['Close']
+        volume = row['Volume']
+
         
         if isinstance(self.balance, np.ndarray): ## Band-Aid
             self.balance = int(self.balance.item())
         
         return np.array([
-            f"{current_price:.2f}",
+            f"{open_price:.2f}",
+            f"{high_price:.2f}",
+            f"{low_price:.2f}",
+            f"{close_price:.2f}",
+            f"{volume:.2f}",
             self.balance, 
             self.shares_held
         ], dtype=np.float32)
@@ -77,20 +82,20 @@ class TradingEnvironment:
         Returns:
           next_state, reward, done
         """
-        current_price = self.prices[self.current_step]
         prev_net_worth = self.net_worth
+        row = self.df.iloc[self.current_step]
+        current_price = row['Close']
 
         # Execute action
         if action == 0:  # Buy
             # Number of shares we can buy
-            max_possible = int(self.balance // current_price)
-            shares_to_buy = min(max_possible, self.max_shares - self.shares_held)
+            max_shares_can_buy = int(self.balance // current_price)
+            shares_to_buy = min(max_shares_can_buy, self.max_shares - self.shares_held)
             cost = shares_to_buy * current_price
             self.balance -= cost
             self.shares_held += shares_to_buy
 
         elif action == 1:  # Sell
-            # Sell all shares held (or you can choose partial selling)
             shares_to_sell = self.shares_held
             self.balance += shares_to_sell * current_price
             self.shares_held = 0
@@ -98,7 +103,7 @@ class TradingEnvironment:
         # If action == 2 (Hold), do nothing
 
         # Update net worth
-        self.net_worth = self.balance + self.shares_held * current_price
+        self.net_worth = self.balance + (self.shares_held * current_price)
         reward = self.net_worth - prev_net_worth  # change in net worth
 
         self.current_step += 1
@@ -108,13 +113,13 @@ class TradingEnvironment:
         return next_state, reward, done
     
 class ReplayBuffer:
-    def __init__(self, max_size=100):
+    def __init__(self, max_size=120):
         self.buffer = deque(maxlen=max_size)
 
     def store(self, experience):
         self.buffer.append(experience)
 
-    def sample_batch(self, batch_size=32):
+    def sample_batch(self, batch_size=45):
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
         return (
@@ -124,9 +129,6 @@ class ReplayBuffer:
             np.array(next_states),
             np.array(dones)
         )
-        # 100 200 40
-        # 102 200 40 (sell) +1
-        # 104 4200 0
 
     def __len__(self):
         return len(self.buffer)
@@ -136,7 +138,7 @@ class DQNAgent:
     def __init__(self, state_size, action_size, gamma=1, lr=0.001,
                  epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995):
         """
-        state_size: Dimension of the state (e.g., 3 in our environment).
+        state_size: Dimension of the state (e.g., 7 in our environment).
         action_size: Number of actions (Buy, Sell, Hold = 3).
         gamma: Discount factor for future rewards.
         lr: Learning rate for optimizer.
@@ -174,7 +176,7 @@ class DQNAgent:
         q_values = self.model.predict(np.array([state]), verbose=0)
         return np.argmax(q_values[0])
 
-    def train(self, batch_size=32):
+    def train(self, batch_size=45):
         """
         Sample a batch from replay memory and perform one step of gradient descent on the Q-network.
         """
@@ -207,7 +209,7 @@ class DQNAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-def train_dqn(env, agent, n_episodes=100, batch_size=32):
+def train_dqn(env, agent, n_episodes=100, batch_size=45):
     for episode in range(n_episodes):
         state = env.reset()
         total_reward = 0
@@ -240,6 +242,8 @@ def train_dqn(env, agent, n_episodes=100, batch_size=32):
 
 intel_data = yf.download(
     "INTC",
+    period="5d", 
+    interval="1m"
 )
 
 intel_data
@@ -248,16 +252,17 @@ intel_data = intel_data[["Open", "Close", "High", "Low", "Volume"]]
 
 intel_data.columns = intel_data.columns.droplevel('Ticker') # Drops Ticker row
 
-data = yf.download('AAPL', start='2020-01-01', end='2022-01-01')
-prices = data['Close'].values
+scalar = StandardScaler()
+
+intel_data[["Open", "Close", "High", "Low", "Volume"]] = scalar.fit_transform(intel_data[["Open", "Close", "High", "Low", "Volume"]])
 
 # Create environment
-env = TradingEnvironment(prices, initial_balance=10000)
+env = TradingEnvironment(intel_data, initial_balance=10000)
 
 # DQN agent
-state_size = 3  # (price, balance, shares_held)
+state_size = 7  # (price, balance, shares_held)
 action_size = 3  # (Buy, Sell, Hold)
 agent = DQNAgent(state_size, action_size)
 
 # Train
-train_dqn(env, agent, n_episodes=50, batch_size=32)
+train_dqn(env, agent, n_episodes=50, batch_size=45)
