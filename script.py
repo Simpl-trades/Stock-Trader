@@ -1,7 +1,8 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
 import yfinance as yf
 
 import tensorflow as tf
@@ -51,7 +52,6 @@ class TradingEnvironment:
           - balance
           - shares held
           - Volume
-          - Change in value ($ or %)
           - 
         """
         row = self.df.iloc[self.current_step]
@@ -59,7 +59,7 @@ class TradingEnvironment:
         open_price = row['Open']
         high_price = row['High']
         low_price = row['Low']
-        close_price = row['Close']
+        # close_price = row['Close']
         volume = row['Volume']
 
         
@@ -70,7 +70,7 @@ class TradingEnvironment:
             f"{open_price:.2f}",
             f"{high_price:.2f}",
             f"{low_price:.2f}",
-            f"{close_price:.2f}",
+            # f"{close_price:.2f}",
             f"{volume:.2f}",
             self.balance, 
             self.shares_held
@@ -78,29 +78,47 @@ class TradingEnvironment:
 
     def step(self, action):
         """
-        Take an action: 0 = Buy, 1 = Sell, 2 = Hold
+        Take an action: Buy = 0, Sell 25% = 1, sell 50% = 2, sell 75% = 3, sell 100% = 4, Hold = 5
         Returns:
           next_state, reward, done
         """
         prev_net_worth = self.net_worth
         row = self.df.iloc[self.current_step]
-        current_price = row['Close']
+        current_price = row['Open']
 
         # Execute action
         if action == 0:  # Buy
             # Number of shares we can buy
             max_shares_can_buy = int(self.balance // current_price)
+            if max_shares_can_buy < 0:
+                max_shares_can_buy = 0
             shares_to_buy = min(max_shares_can_buy, self.max_shares - self.shares_held)
             cost = shares_to_buy * current_price
             self.balance -= cost
             self.shares_held += shares_to_buy
 
-        elif action == 1:  # Sell
-            shares_to_sell = self.shares_held
+        elif action == 1:  # Sell 25%
+            shares_to_sell = self.shares_held / 4
             self.balance += shares_to_sell * current_price
             self.shares_held = 0
+        
+        elif action == 2:  # Sell 50%
+            shares_to_sell = self.shares_held / 2
+            self.balance += shares_to_sell * current_price
+            self.shares_held = 0
+            
+        elif action == 3:  # Sell 75%
+            shares_to_sell = (self.shares_held / 4) * 3  
+            self.balance += shares_to_sell * current_price
+            self.shares_held = 0
+        
+        elif action == 4:  # Sell 100%
+            shares_to_sell = self.shares_held
+            self.balance += shares_to_sell * current_price
+            self.shares_held = 0    
+        
 
-        # If action == 2 (Hold), do nothing
+        # If action == 5 (Hold), do nothing
 
         # Update net worth
         self.net_worth = self.balance + (self.shares_held * current_price)
@@ -133,10 +151,10 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
     
-    
+
 class DQNAgent:
     def __init__(self, state_size, action_size, gamma=1, lr=0.001,
-                 epsilon=1.0, epsilon_min=0.01, epsilon_decay=0.995):
+                 epsilon=0.75, epsilon_min=0.01, epsilon_decay=0.935):
         """
         state_size: Dimension of the state (e.g., 7 in our environment).
         action_size: Number of actions (Buy, Sell, Hold = 3).
@@ -208,6 +226,9 @@ class DQNAgent:
         """
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
+            
+    def save_model(self, filename='dqn_model.h5'):
+        self.model.save(filename)
 
 def train_dqn(env, agent, n_episodes=100, batch_size=45):
     for episode in range(n_episodes):
@@ -237,32 +258,53 @@ def train_dqn(env, agent, n_episodes=100, batch_size=45):
             total_reward = int(total_reward.item())
         
         print(f"Episode {episode+1}/{n_episodes}, Total Reward: {total_reward:.2f}, Epsilon: {agent.epsilon:.3f}")
+        episode_rewards.append(round(total_reward, 2))
+        
+    agent.save_model('dqn_model.h5')
 
 
-
+# Get data and process it using Yahoo Finance (In this case Intel)
 intel_data = yf.download(
     "INTC",
     period="5d", 
     interval="1m"
 )
 
-intel_data
+intel_data = intel_data[['Open', "High", "Low", "Volume"]]
 
-intel_data = intel_data[["Open", "Close", "High", "Low", "Volume"]]
+"""
+current price: 100
+highest: 101.92
+lowest: 99.50
+"""
 
 intel_data.columns = intel_data.columns.droplevel('Ticker') # Drops Ticker row
 
 scalar = StandardScaler()
 
-intel_data[["Open", "Close", "High", "Low", "Volume"]] = scalar.fit_transform(intel_data[["Open", "Close", "High", "Low", "Volume"]])
+intel_data[['Open',"High", "Low", "Volume"]] = scalar.fit_transform(intel_data[['Open',"High", "Low", "Volume"]])
+
+# Stores rewards of the model per episode
+episode_rewards = []
 
 # Create environment
 env = TradingEnvironment(intel_data, initial_balance=10000)
 
 # DQN agent
-state_size = 7  # (price, balance, shares_held)
-action_size = 3  # (Buy, Sell, Hold)
+state_size = 6  # ('Open', "High", "Low", "Volume", price, balance, shares_held)
+action_size = 6  # (Buy = 0, Sell 25% = 1, sell 50% = 2, sell 75% = 3, sell 100% = 4, Hold = 5)
 agent = DQNAgent(state_size, action_size)
 
 # Train
 train_dqn(env, agent, n_episodes=50, batch_size=45)
+
+
+# Plot rewards per episode
+
+plt.figure(figsize=(8, 4))
+plt.plot(episode_rewards, label='Episode Reward')
+plt.title('DQN Training Rewards')
+plt.xlabel('Episode')
+plt.ylabel('Total Reward')
+plt.legend()
+plt.savefig("my_plot.png")
