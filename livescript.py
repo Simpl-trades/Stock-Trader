@@ -29,13 +29,14 @@ import pickle
 
 
 class TradingEnvironment:
-    def __init__(self, trading_client, symbol, initial_balance=10000):
+    def __init__(self, trading_client, data_client,symbol, initial_balance=10000):
         """
         prices: A list or array of stock prices (e.g., daily closing prices).
         initial_balance: How much cash we start with.
         max_shares: Maximum shares you can hold (to avoid unrealistic large positions).
         """
         self.trading_client = trading_client
+        self.data_client = data_client
         self.symbol = symbol
         self.initial_balance = initial_balance
 
@@ -59,10 +60,13 @@ class TradingEnvironment:
         """
         Fetches the latest trade or bar for the given symbol from Alpaca.
         """
-        bars = self.trading_client.StockLatestTradeRequest(self.symbol)
-        latest_bar = bars[self.symbol]  # an Alpaca EntityBar object
-        current_price = float(latest_bar.close)
+        request = StockLatestTradeRequest(symbol_or_symbols=[self.symbol])
+        latest_trade_dict = self.data_client.get_stock_latest_trade(request)
+        latest_trade = latest_trade_dict[self.symbol]  # returns a LatestTrade object
+        current_price = float(latest_trade.price)
         return current_price
+
+
 
     def _place_market_order(self, side, qty):
         """
@@ -70,6 +74,7 @@ class TradingEnvironment:
         `qty` can be fractional if your account supports fractional shares, 
         or an integer if not.
         """
+
         order_data = MarketOrderRequest(
             symbol=self.symbol,
             qty=qty,
@@ -108,7 +113,7 @@ class TradingEnvironment:
 
         # Execute action
         if action == 0:  # Buy all we can with local 'balance'
-            max_shares_can_buy = int(self.balance // current_price)
+            max_shares_can_buy = int(self.balance) // int(current_price)
             if max_shares_can_buy > 0:
                 self._place_market_order(OrderSide.BUY, max_shares_can_buy)
                 # Update local tracking
@@ -155,8 +160,8 @@ class TradingEnvironment:
         # If action == 5 (Hold), do nothing
 
         # Update net worth
-        self.net_worth = self.balance + (self.shares_held * current_price)
-        reward = self.net_worth - prev_net_worth  # change in net worth
+        self.net_worth = int(self.balance) + int(self.shares_held * current_price)
+        reward = int(self.net_worth) - int(prev_net_worth)  # change in net worth
         
         done = (self.current_step >= 100)
 
@@ -166,6 +171,7 @@ class TradingEnvironment:
 class ReplayBuffer:
     def __init__(self, max_size=120):
         self.buffer = deque(maxlen=max_size)
+    
     def sample_batch(self, batch_size=45):
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
@@ -176,6 +182,9 @@ class ReplayBuffer:
             np.array(next_states),
             np.array(dones)
         )
+    
+    def store(self, experience):
+        self.buffer.append(experience)
 
     def __len__(self):
         return len(self.buffer)
@@ -297,6 +306,7 @@ ALPACA_API_KEY = os.getenv('ALPACA_API_KEY')
 ALPACA_API_SECRET = os.getenv('ALPACA_API_SECRET')
 
 trading_client = TradingClient(ALPACA_API_KEY, ALPACA_API_SECRET, paper=True)
+data_client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_API_SECRET)
 account = trading_client.get_account()
 
 # Stores rewards of the model per episode
@@ -305,6 +315,7 @@ episode_rewards = []
 # Create environment
 env = TradingEnvironment(
     trading_client=trading_client, 
+    data_client=data_client,
     symbol="NVDA", 
     initial_balance=account.buying_power
 )
