@@ -31,9 +31,13 @@ import pickle
 class TradingEnvironment:
     def __init__(self, trading_client, data_client,symbol, initial_balance=10000):
         """
-        prices: A list or array of stock prices (e.g., daily closing prices).
-        initial_balance: How much cash we start with.
-        max_shares: Maximum shares you can hold (to avoid unrealistic large positions).
+        Trading Client
+        Data Client
+        Symbol
+        Current Step
+        Sharesh Held
+        Balance
+        Net Worth
         """
         self.trading_client = trading_client
         self.data_client = data_client
@@ -62,7 +66,7 @@ class TradingEnvironment:
         """
         request = StockLatestTradeRequest(symbol_or_symbols=[self.symbol])
         latest_trade_dict = self.data_client.get_stock_latest_trade(request)
-        latest_trade = latest_trade_dict[self.symbol]  # returns a LatestTrade object
+        latest_trade = latest_trade_dict[self.symbol]
         current_price = float(latest_trade.price)
         return current_price
 
@@ -71,8 +75,7 @@ class TradingEnvironment:
     def _place_market_order(self, side, qty):
         """
         Places a market order (paper) via Alpaca.
-        `qty` can be fractional if your account supports fractional shares, 
-        or an integer if not.
+        `qty` can be fractional
         """
 
         order_data = MarketOrderRequest(
@@ -89,10 +92,9 @@ class TradingEnvironment:
         """
         Return the state as a NumPy array (can be expanded with indicators).
         Example features:
-          
         """
         if isinstance(self.balance, np.ndarray): ## Band-Aid
-            self.balance = int(self.balance.item())
+            self.balance = float(self.balance.item())
         
         return np.array([
             self.balance, 
@@ -113,17 +115,17 @@ class TradingEnvironment:
 
         # Execute action
         if action == 0:  # Buy all we can with local 'balance'
-            max_shares_can_buy = int(self.balance) // int(current_price)
+            max_shares_can_buy = float(self.balance) // float(current_price)
             if max_shares_can_buy > 0:
                 self._place_market_order(OrderSide.BUY, max_shares_can_buy)
                 # Update local tracking
                 cost = max_shares_can_buy * current_price
                 self.shares_held += max_shares_can_buy
-                self.balance -= cost
+                self.balance -= float(cost)
 
         elif action == 1:  # Sell 25%
             if self.shares_held > 0:
-                shares_to_sell = int(self.shares_held * 0.25)
+                shares_to_sell = float(self.shares_held * 0.25)
                 if shares_to_sell > 0:
                     self._place_market_order(OrderSide.SELL, shares_to_sell)
                     revenue = shares_to_sell * current_price
@@ -132,7 +134,7 @@ class TradingEnvironment:
 
         elif action == 2:  # Sell 50%
             if self.shares_held > 0:
-                shares_to_sell = int(self.shares_held * 0.5)
+                shares_to_sell = float(self.shares_held * 0.5)
                 if shares_to_sell > 0:
                     self._place_market_order(OrderSide.SELL, shares_to_sell)
                     revenue = shares_to_sell * current_price
@@ -141,7 +143,7 @@ class TradingEnvironment:
 
         elif action == 3:  # Sell 75%
             if self.shares_held > 0:
-                shares_to_sell = int(self.shares_held * 0.75)
+                shares_to_sell = float(self.shares_held * 0.75)
                 if shares_to_sell > 0:
                     self._place_market_order(OrderSide.SELL, shares_to_sell)
                     revenue = shares_to_sell * current_price
@@ -160,8 +162,8 @@ class TradingEnvironment:
         # If action == 5 (Hold), do nothing
 
         # Update net worth
-        self.net_worth = int(self.balance) + int(self.shares_held * current_price)
-        reward = int(self.net_worth) - int(prev_net_worth)  # change in net worth
+        self.net_worth = float(self.balance) + float(self.shares_held * current_price)
+        reward = float(self.net_worth) - float(prev_net_worth)  # change in net worth
         
         done = (self.current_step >= 100)
 
@@ -293,7 +295,7 @@ def train_dqn(env, agent, n_episodes=100, batch_size=45):
         agent.update_epsilon()
         
         if isinstance(total_reward, np.ndarray):    ## Band-Aid
-            total_reward = int(total_reward.item())
+            total_reward = float(total_reward.item())
         
         print(f"Episode {episode+1}/{n_episodes}, Total Reward: {total_reward:.2f}, Epsilon: {agent.epsilon:.3f}")
         episode_rewards.append(round(total_reward, 2))
@@ -321,7 +323,7 @@ env = TradingEnvironment(
 )
 
 # DQN agent
-state_size = 6  # ('Open', "High", "Low", "Volume", price, balance, shares_held)
+state_size = 2
 action_size = 6  # (Buy = 0, Sell 25% = 1, sell 50% = 2, sell 75% = 3, sell 100% = 4, Hold = 5)
 agent = DQNAgent(state_size, action_size)
 
